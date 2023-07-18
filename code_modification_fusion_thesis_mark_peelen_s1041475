@@ -1,0 +1,212 @@
+"MDICC" <- function( X, c, no.dim = NA, k = 10, fusion_number = 1 ) {
+  
+  # set any required parameter to the defaults
+  if(is.na(no.dim)) {
+    no.dim = c
+  }
+  
+  # start the clock to measure the execution time
+  ptm = proc.time()
+  
+  # set some parameters
+  NITER = 30
+  num = ncol(X[[1]])
+  r = -1
+  beta = 0.8
+  # change to dgCMatrix type.
+  
+  for(i in length(X)){
+      X[[i]] = Matrix(X[[i]], sparse = FALSE)
+    
+  }
+  X2 = X
+
+  ##Fqian
+  for(i in length(X)){
+    d = apply(X2[[i]],1,sum)
+     d1 = diag(d)
+    X2[[i]] = solve(d1^(1)) %*% X2[[i]]
+     
+  }
+  D_Kernels = X2
+  
+  # set up some parameters
+  alphaK = 1 / rep(length(D_Kernels),length(D_Kernels))
+  distX = array(0,c(dim(D_Kernels[[1]])[1],dim(D_Kernels[[1]])[2]))
+
+  for (i in 1:length(D_Kernels)) {
+    distX = distX + D_Kernels[[i]]
+  }
+  distX = distX / length(D_Kernels)
+
+  res = apply(distX,MARGIN=1,FUN=function(x) return(sort(x,index.return = TRUE)))
+  distX1 = array(0,c(nrow(distX),ncol(distX)))
+  idx = array(0,c(nrow(distX),ncol(distX)))
+  for(i in 1:nrow(distX)) {
+    distX1[i,] = res[[i]]$x
+    idx[i,] = res[[i]]$ix
+  }
+
+  # Addition to the original code of the MDICC method to determine k2
+  # For the functions used in this function, I would like to refer to
+  # The original paper where they give the original source code:
+  # [5]	Yang, Y., Tian, S., Qiu, Y., Zhao, P., & Zou, Q. (2022). 
+  # MDICC: Novel method for multi-omics data integration and cancer 
+  # subtype identification. Briefings in Bioinformatics, 23(3), bbac132.
+
+  # Setting variable to compare k's with each other
+  highest_k = k
+  A = array(0, c(num, num))
+
+  # For the first and second fusion step this modification is only useful
+  if (fusion_number < 3) {
+
+    # The range of k2 for the MDICC affinity matrices
+    range = 2:100
+
+    # If the affinity matrices based on CCA are fused, the range changes to 2 till the amount of samples - 2
+    if (fusion_number == 2) {
+      range = 2:(num - 2)
+    }
+    highest_rr = array(0, num)
+    highest_k = 2
+
+    # Exhaustive search for finding the highest value for the mean of rr
+    for (i in range) {
+      di = distX1[, 2:(i + 2)]
+      rr = 0.5 * (i * di[, i + 1] - apply(di[, 1:i], MARGIN = 1, FUN = sum))
+      id = idx[, 2:(i + 2)]
+      if (mean(rr) > mean(highest_rr)) {
+        highest_k = i
+        highest_rr = rr
+      }
+    }
+  }
+
+  # Process the steps calculated before
+  di = distX1[, 2:(highest_k + 2)]
+  rr = 0.5 * (highest_k * di[, highest_k + 1] - apply(di[, 1:highest_k], MARGIN = 1, FUN = sum))
+  id = idx[, 2:(highest_k + 2)]
+  if(r<=0) {
+    r = mean(rr)
+  }
+  lambda = max(mean(rr),0)
+ 
+  S0 = max(max(distX)) - distX
+  
+  cat("Network fusion.\n")
+  
+
+  
+  # compute dn(!!normalization)
+  S0 = dn(S0,'ave') 
+  S = S0
+  D0 = diag(apply(S,MARGIN=2,FUN=sum)) 
+  L0 = D0 - S
+  
+  eig1_res = eig1(L0,c,0) 
+  F_eig1 = eig1_res$eigvec
+  temp_eig1 = eig1_res$eigval
+  evs_eig1 = eig1_res$eigval_full
+  
+  # perform the iterative procedure NITER times
+  converge = vector()
+  for(iter in 1:NITER) {
+    
+    cat("Iteration: ",iter,"\n")
+    
+    distf = L2_distance_1(t(F_eig1),t(F_eig1))
+    A = array(0,c(num,num))
+    b = idx[,2:dim(idx)[2]]
+    a = apply(array(0,c(num,ncol(b))),MARGIN=2,FUN=function(x){ x = 1:num })
+    inda = cbind(as.vector(a),as.vector(b))
+    ad = (distX[inda]+lambda*distf[inda])/2/r
+    dim(ad) = c(num,ncol(b))
+    
+    # call the c function for the optimization
+    c_input = -t(ad)
+    c_output = t(ad)
+    ad = t(.Call("projsplx_R",c_input,c_output))# KKT
+    
+    A[inda] = as.vector(ad)
+    A[is.nan(A)] = 0
+    A = (A + t(A)) / 2
+    S = (1 - beta) * S + beta * A
+
+    
+    # After updating S
+    D = diag(apply(S,MARGIN=2,FUN=sum))
+    L = D - S 
+    F_old = F_eig1
+    eig1_res = eig1(L,c,0)
+    F_eig1 = eig1_res$eigvec
+    temp_eig1 = eig1_res$eigval
+    ev_eig1 = eig1_res$eigval_full
+    evs_eig1 = cbind(evs_eig1,ev_eig1)
+    DD = vector()
+    # W * S
+    for (i in 1:length(D_Kernels)) {
+      temp1 = (.Machine$double.eps+D_Kernels[[i]]) * (S+.Machine$double.eps)
+      temp2 = 0.5*(.Machine$double.eps+D_Kernels[[i]]) * (D_Kernels[[i]]+.Machine$double.eps)
+      temp = temp1 - temp2
+      DD[i] = mean(apply(temp,MARGIN=2,FUN=sum))
+    }
+    alphaK0 = umkl(DD)
+    alphaK0 = alphaK0 / sum(alphaK0)
+    alphaK = (1-beta) * alphaK + beta * alphaK0
+    alphaK = alphaK / sum(alphaK)
+    fn1 = sum(ev_eig1[1:c])
+    fn2 = sum(ev_eig1[1:(c+1)])
+    converge[iter] = fn2 - fn1
+    if (iter<10) {
+      if (ev_eig1[length(ev_eig1)] > 0.000001) {
+        lambda = 1.5 * lambda
+        r = r / 1.01
+      }
+    }
+    else {
+      if(converge[iter]>converge[iter-1]) {
+        S = S_old
+        # if(converge[iter-1] > 0.2) {
+        #   warning('Maybe you should set a larger value of c.')
+        # }
+        break
+      }
+    }
+    S_old = S
+ 
+    # compute Kbeta
+    distX = D_Kernels[[1]] * alphaK[1]
+
+    for (i in 2:length(D_Kernels)) {
+      distX = distX + as.matrix(D_Kernels[[i]]) * alphaK[i]
+    }
+    # distX = distX + as.matrix(D_Kernels[[1]]) * alphaK[1]
+    # sort distX for rows
+    res = apply(distX,MARGIN=1,FUN=function(x) return(sort(x,index.return = TRUE)))
+    distX1 = array(0,c(nrow(distX),ncol(distX)))
+    idx = array(0,c(nrow(distX),ncol(distX)))
+    for(i in 1:nrow(distX)) {
+      distX1[i,] = res[[i]]$x
+      idx[i,] = res[[i]]$ix
+    }
+    
+  }
+  LF = F_eig1
+  D = diag(apply(S,MARGIN=2,FUN=sum))
+  L = D - S
+  
+  # compute the eigenvalues and eigenvectors of P
+  eigen_L = eigen(L)
+  U = eigen_L$vectors
+  D = eigen_L$values
+  
+
+  # compute the execution time
+  execution.time = proc.time() - ptm
+  
+  # create the structure with the results
+  results = S
+  return(results)
+  
+}
