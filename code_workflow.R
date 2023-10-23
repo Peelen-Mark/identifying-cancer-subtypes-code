@@ -21,7 +21,7 @@ source_python("score.py")
 source_python("label.py")
 
 # read data
-setwd("C:\\MDICC-main\\data_SKCM\\data\\skcm") # data path
+setwd("C:\\MDICC-main\\data_BRCA\\data\\brca") # data path
 list <- list.files()
 data <- data.frame()
 data1 <- list()
@@ -56,12 +56,12 @@ for(i in 1:3){
 }
 
 # Get proposed affinity matrices based on CCA
-survival_path <- "C:\\MDICC-main\\data_SKCM\\data\\survival.csv"
-aff_files <- c("A12_SKCM.csv", "A21_SKCM.csv", "A20_SKCM.csv", "A02_SKCM.csv", "A01_SKCM.csv", "A10_SKCM.csv")
+survival_path <- "C:\\MDICC-main\\data_BRCA\\data\\survival.csv"
+aff_files <- c("A12_BRCA.csv", "A21_BRCA.csv", "A20_BRCA.csv", "A02_BRCA.csv", "A01_BRCA.csv", "A10_BRCA.csv")
 aff_proposed <- vector("list", length(aff_files))
 # Read affinity files
 for (i in 1:length(aff_files)) {
-  file_path <- paste("C:\\MDICC-main\\data_SKCM\\data\\", aff_files[i], sep = "")
+  file_path <- paste("C:\\MDICC-main\\data_BRCA\\data\\", aff_files[i], sep = "")
   aff_proposed[[i]] <- as.matrix(read.csv(file = file_path))[, -1]
 }
 
